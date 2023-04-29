@@ -1,5 +1,6 @@
 package com.example.encryptedmessenger
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.os.Bundle
 import android.util.Log
@@ -95,7 +96,7 @@ class ChatLog : AppCompatActivity() {
      */
     private fun storeUserMessages(message: String, recipientId: String) {
         // Encrypt the user's message using AES-GCM and generate a new key and IV
-        val (encryptedMessage, encryptedAesKey, iv) = encryptUsermessages(message)
+        val (encryptedMessage, encryptedAesKey, iv) = encryptUserMessages(message)
 
         // Get an instance of the Firestore database and the current user's ID
         val db = FirebaseFirestore.getInstance()
@@ -132,7 +133,7 @@ class ChatLog : AppCompatActivity() {
      * @param message The plaintext message to be encrypted.
      * @return A Triple of Base64-encoded strings containing the encrypted message, key, and IV.
      */
-    private fun encryptUsermessages(message: String): Triple<String, String, String> {
+    private fun encryptUserMessages(message: String): Triple<String, String, String> {
         // Generate a new AES key
         val keyGenerator = KeyGenerator.getInstance("AES")
         keyGenerator.init(256)
@@ -335,6 +336,7 @@ class ChatLog : AppCompatActivity() {
             }
             .addOnFailureListener { e ->
                 // Show an error message if there was an error retrieving the recipient's public key
+                e.printStackTrace()
                 Toast.makeText(context, "Error retrieving recipient's public key", Toast.LENGTH_SHORT).show()
             }
     }
@@ -362,8 +364,9 @@ class ChatLog : AppCompatActivity() {
      * @param aesKey The AES key to use for encryption.
      * @return The Base64-encoded ciphertext of the encrypted message, or null if there was an error during encryption.
      */
+    @SuppressLint("GetInstance")
     private fun encryptMessageWithAesKey(message: String, aesKey: SecretKey): String? {
-        try {
+        return try {
             // Get an instance of the Cipher class for AES encryption
             val cipher = Cipher.getInstance("AES")
 
@@ -372,11 +375,11 @@ class ChatLog : AppCompatActivity() {
 
             // Encrypt the plaintext message with the cipher and convert the resulting ciphertext to a Base64-encoded string
             val encryptedBytes = cipher.doFinal(message.toByteArray(Charsets.UTF_8))
-            return Base64.encodeToString(encryptedBytes, Base64.DEFAULT)
+            Base64.encodeToString(encryptedBytes, Base64.DEFAULT)
         } catch (e: Exception) {
             // Log any errors that occur during encryption and return null to indicate failure
             e.printStackTrace()
-            return null
+            null
         }
     }
 
@@ -388,7 +391,7 @@ class ChatLog : AppCompatActivity() {
      * @return The Base64-encoded ciphertext of the encrypted AES key, or null if there was an error during encryption.
      */
     private fun encryptAesKeyWithRecipientPublicKey(aesKey: SecretKey, recipientPublicKey: PublicKey): String? {
-        try {
+        return try {
             // Get an instance of the Cipher class for RSA encryption with PKCS1Padding
             val cipher = Cipher.getInstance("RSA/ECB/PKCS1Padding")
 
@@ -397,11 +400,11 @@ class ChatLog : AppCompatActivity() {
 
             // Encrypt the AES key with the cipher and convert the resulting ciphertext to a Base64-encoded string
             val encryptedBytes = cipher.doFinal(aesKey.encoded)
-            return Base64.encodeToString(encryptedBytes, Base64.DEFAULT)
+            Base64.encodeToString(encryptedBytes, Base64.DEFAULT)
         } catch (e: Exception) {
             // Log any errors that occur during encryption and return null to indicate failure
             e.printStackTrace()
-            return null
+            null
         }
     }
 
@@ -451,14 +454,15 @@ class ChatLog : AppCompatActivity() {
      *The function listens for changes in the database and updates the chat list accordingly.
      *It retrieves messages that were sent to and from the recipient identified by recipientId.
      */
+    @SuppressLint("NotifyDataSetChanged")
     private fun fetchSymmetricMessages(recipientId: String) {
 // Get an instance of the Firestore database and the ID of the current user
         val db = FirebaseFirestore.getInstance()
         val currentUser = FirebaseAuth.getInstance().currentUser
         val currentUserId = currentUser?.uid
-                // Listen for changes to the "Messages" collection in Firestore
-                db.collection("Messages")
-                    .orderBy("timestamp")
+            // Listen for changes to the "Messages" collection in Firestore
+            db.collection("Messages")
+            .orderBy("timestamp")
                     .addSnapshotListener { querySnapshot, error ->
                         if (error != null) {
                             // Log an error message if there was an error fetching the messages
@@ -505,6 +509,7 @@ class ChatLog : AppCompatActivity() {
      *
      * @param newMessages a list of new chat messages to be added to the chat list.
      */
+    @SuppressLint("NotifyDataSetChanged")
     private fun updateChatList(newMessages: List<ChatMessage>) {
         // Add the new messages to the chat list.
         chatList.addAll(newMessages)
@@ -614,6 +619,7 @@ class ChatLog : AppCompatActivity() {
      * @param aesKey the AES key used to decrypt the message.
      * @return the decrypted message or null if decryption failed.
      */
+    @SuppressLint("GetInstance")
     private fun decryptMessageWithAesKey(encryptedMessage: String, aesKey: SecretKey): String? {
         return try {
             // Get an instance of the AES cipher.
