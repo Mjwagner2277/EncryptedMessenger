@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "963648065233",
+    "project_id": "encryptedmessenger-b4928",
+    "storage_bucket": "encryptedmessenger-b4928.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:963648065233:android:bd1dd111033ca4cbbabff0",
+        "android_client_info": {
+          "package_name": "com.example.encryptedmessenger"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "963648065233-7dd445mkvolbbeo6eeu23mgb9fhk8eq1.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD1ILZlYPbE1fUsGsVQOlh4q66b6TdVWB8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "963648065233-7dd445mkvolbbeo6eeu23mgb9fhk8eq1.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
