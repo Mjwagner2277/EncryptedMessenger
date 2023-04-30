@@ -27,9 +27,11 @@ import java.security.KeyStore
 import java.security.PrivateKey
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
+import java.security.Signature
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
+
 
 class ChatLog : AppCompatActivity() {
     private lateinit var recyclerView: RecyclerView
@@ -85,6 +87,7 @@ class ChatLog : AppCompatActivity() {
             false
         }
     }
+
 
     /**
      * Encrypts a user's message using AES-GCM with a new key and IV,
@@ -287,9 +290,11 @@ class ChatLog : AppCompatActivity() {
     private fun encryptMessageWithEphemeralKey(message: String, recipientPublicKey: PublicKey): EncryptedMessageData? {
         // Generate a new AES key
         val aesKey = generateAesKey()
+        val privateKey = getCurrentUserPrivateKey()
 
         // Encrypt the message using the AES key
-        val encryptedMessage = encryptMessageWithAesKey(message, aesKey)
+        val encryptedMessage = encryptMessageAndSignWithAesKey(message, aesKey, privateKey)
+        println("Encrypted message is"+encryptedMessage)
 
         // Encrypt the AES key using the recipient's public key
         val encryptedAesKey = encryptAesKeyWithRecipientPublicKey(aesKey, recipientPublicKey)
@@ -365,23 +370,36 @@ class ChatLog : AppCompatActivity() {
      * @return The Base64-encoded ciphertext of the encrypted message, or null if there was an error during encryption.
      */
     @SuppressLint("GetInstance")
-    private fun encryptMessageWithAesKey(message: String, aesKey: SecretKey): String? {
+    private fun encryptMessageAndSignWithAesKey(message: String, aesKey: SecretKey, privateKey: PrivateKey): String? {
         return try {
             // Get an instance of the Cipher class for AES encryption
-            val cipher = Cipher.getInstance("AES")
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
 
-            // Initialize the cipher in encryption mode with the provided AES key
-            cipher.init(Cipher.ENCRYPT_MODE, aesKey)
+            // Generate a random IV (Initialization Vector) for each encryption
+            val iv = ByteArray(cipher.blockSize)
+            SecureRandom().nextBytes(iv)
+            val ivParams = IvParameterSpec(iv)
 
-            // Encrypt the plaintext message with the cipher and convert the resulting ciphertext to a Base64-encoded string
+            // Initialize the cipher in encryption mode with the provided AES key and IV
+            cipher.init(Cipher.ENCRYPT_MODE, aesKey, ivParams)
+
+            // Encrypt the message with the cipher and convert the resulting ciphertext to a Base64-encoded string
             val encryptedBytes = cipher.doFinal(message.toByteArray(Charsets.UTF_8))
-            Base64.encodeToString(encryptedBytes, Base64.DEFAULT)
+            val encryptedMessage = Base64.encodeToString(encryptedBytes, Base64.DEFAULT)
+
+            // Sign the encrypted message with the provided private key
+            val signedMessage = signMessage(encryptedMessage, privateKey)
+
+            // Combine the encrypted message, signature, and IV, separated by a delimiter
+            "${Base64.encodeToString(iv, Base64.DEFAULT)}|$encryptedMessage|$signedMessage"
         } catch (e: Exception) {
             // Log any errors that occur during encryption and return null to indicate failure
             e.printStackTrace()
             null
         }
     }
+
+
 
     /**
      * Encrypts the provided AES key using the recipient's public key and returns the resulting ciphertext as a Base64-encoded string.
@@ -455,54 +473,57 @@ class ChatLog : AppCompatActivity() {
      *It retrieves messages that were sent to and from the recipient identified by recipientId.
      */
     @SuppressLint("NotifyDataSetChanged")
-    private fun fetchSymmetricMessages(recipientId: String) {
-// Get an instance of the Firestore database and the ID of the current user
+    private fun fetchSymmetricMessages(recipientId: String, senderPublicKey: PublicKey) {
+        // Get an instance of the Firestore database and the ID of the current user
         val db = FirebaseFirestore.getInstance()
         val currentUser = FirebaseAuth.getInstance().currentUser
         val currentUserId = currentUser?.uid
-            // Listen for changes to the "Messages" collection in Firestore
-            db.collection("Messages")
+        // Listen for changes to the "Messages" collection in Firestore
+        db.collection("Messages")
             .orderBy("timestamp")
-                    .addSnapshotListener { querySnapshot, error ->
-                        if (error != null) {
-                            // Log an error message if there was an error fetching the messages
-                            Log.w(
-                                "com.example.encryptedmessenger.ChatLog",
-                                "Error fetching messages",
-                                error
-                            )
-                            return@addSnapshotListener
-                        }
+            .addSnapshotListener { querySnapshot, error ->
+                if (error != null) {
+                    // Log an error message if there was an error fetching the messages
+                    Log.w(
+                        "com.example.encryptedmessenger.ChatLog",
+                        "Error fetching messages",
+                        error
+                    )
+                    return@addSnapshotListener
+                }
 
-                        // Clear the current chat list
-                        chatList.clear()
+                // Clear the current chat list
+                chatList.clear()
 
-                        // Iterate through the documents in the query results
-                        querySnapshot?.documents?.forEach { document ->
-                            val recipientUserName = intent.getStringExtra("recipientUsername")
-                            val fromID = document.getString("fromID")
-                            val toID = document.getString("toID")
-                            val timestamp = document.getDate("timestamp")
+                // Iterate through the documents in the query results
+                querySnapshot?.documents?.forEach { document ->
+                    val recipientUserName = intent.getStringExtra("recipientUsername")
+                    val fromID = document.getString("fromID")
+                    val toID = document.getString("toID")
+                    val timestamp = document.getDate("timestamp")
 
-                            // Check if the message was sent to and from the recipient identified by recipientId
-                            if ((fromID == recipientId) && (toID == currentUserId)) {
-                                val encryptedMessage = document.getString("encryptedMessage")
-                                val encryptedAesKey = document.getString("encryptedAesKey")
+                    // Check if the message was sent to and from the recipient identified by recipientId
+                    if ((fromID == recipientId) && (toID == currentUserId)) {
+                        val encryptedMessage = document.getString("encryptedMessage")
+                        val encryptedAesKey = document.getString("encryptedAesKey")
 
-                                // Decrypt the message using the encrypted AES key
-                                if (encryptedMessage != null && encryptedAesKey != null) {
-                                    val decryptedMessage = decryptMessage(encryptedMessage, encryptedAesKey)
-                                    if (decryptedMessage != null) {
-                                        chatList.add(ChatMessage(recipientUserName, decryptedMessage, timestamp!!))
-                                    }
-                                }
+                        // Decrypt the message using the encrypted AES key and the sender's public key
+                        if (encryptedMessage != null && encryptedAesKey != null) {
+                            val decryptedMessage = decryptMessage(encryptedMessage, encryptedAesKey, senderPublicKey)
+                            if (decryptedMessage != null) {
+                                chatList.add(ChatMessage(recipientUserName, decryptedMessage, timestamp!!))
+                                println("The decrypted Message is: " + decryptedMessage)
                             }
                         }
-
-                        // Notify the adapter that the chat list has been updated
-                        adapter.notifyDataSetChanged()
+                        println("Encrypted Messages is null")
                     }
+                }
+
+                // Notify the adapter that the chat list has been updated
+                adapter.notifyDataSetChanged()
+            }
     }
+
 
     /**
      * Updates the chat list with new chat messages.
@@ -532,20 +553,64 @@ class ChatLog : AppCompatActivity() {
      * @param encryptedAesKey the encrypted AES key used to encrypt the message.
      * @return the decrypted message or null if decryption failed.
      */
-    private fun decryptMessage(encryptedMessage: String, encryptedAesKey: String): String? {
-        // Get the user's private key.
-        val privateKey = getCurrentUserPrivateKey()
+    private fun decryptMessage(combinedString: String, encryptedAesKey: String, publicKey: PublicKey): String? {
+        return try {
+            // Get the user's private key.
+            val privateKey = getCurrentUserPrivateKey()
 
-        // Decrypt the AES key using the user's private key.
-        val aesKey = decryptAesKeyWithPrivateKey(encryptedAesKey, privateKey)
+            // Decrypt the AES key using the user's private key.
+            val aesKey = decryptAesKeyWithPrivateKey(encryptedAesKey, privateKey)
 
-        // Decrypt the message using the decrypted AES key.
-        return if (aesKey != null) {
-            decryptMessageWithAesKey(encryptedMessage, aesKey)
-        } else {
+            // Split the combined string.
+            val splitList = combinedString.split("|")
+
+            // Check if the list has the required number of elements (3 in this case).
+            if (splitList.size != 3) {
+                return null
+            }
+
+            // Extract the IV, encrypted message, and signature from the split list.
+            val (ivString, encryptedMessage, signature) = splitList
+
+            // Verify the signature.
+            if (!verifySignature(encryptedMessage, signature, publicKey)) {
+                return null
+            }
+
+            // Decrypt the message using the decrypted AES key and the IV.
+            if (aesKey != null) {
+                val iv = Base64.decode(ivString, Base64.DEFAULT)
+                val ivParams = IvParameterSpec(iv)
+                val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+                cipher.init(Cipher.DECRYPT_MODE, aesKey, ivParams)
+
+                // Decode the encrypted message from Base64 to a byte array.
+                val encryptedMessageBytes = Base64.decode(encryptedMessage, Base64.DEFAULT)
+
+                // Decrypt the message using the AES cipher.
+                val decryptedBytes = cipher.doFinal(encryptedMessageBytes)
+
+                // Convert the decrypted bytes to a UTF-8 encoded string and return it.
+                String(decryptedBytes, Charsets.UTF_8)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            // If there is an error decrypting the message, print the stack trace and return null.
+            e.printStackTrace()
             null
         }
     }
+
+
+    private fun verifySignature(encryptedMessage: String, signatureString: String, publicKey: PublicKey): Boolean {
+        val signature = Signature.getInstance("SHA256withRSA")
+        signature.initVerify(publicKey)
+        signature.update(encryptedMessage.toByteArray(Charsets.UTF_8))
+        val signatureBytes = Base64.decode(signatureString, Base64.DEFAULT)
+        return signature.verify(signatureBytes)
+    }
+
 
     /**
      * Gets the current user's private key from the Android Keystore.
@@ -620,13 +685,17 @@ class ChatLog : AppCompatActivity() {
      * @return the decrypted message or null if decryption failed.
      */
     @SuppressLint("GetInstance")
-    private fun decryptMessageWithAesKey(encryptedMessage: String, aesKey: SecretKey): String? {
+    private fun decryptMessageWithAesKey(encryptedMessage: String, aesKey: SecretKey, ivString: String): String? {
         return try {
             // Get an instance of the AES cipher.
-            val cipher = Cipher.getInstance("AES")
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
 
-            // Initialize the cipher in decryption mode with the AES key.
-            cipher.init(Cipher.DECRYPT_MODE, aesKey)
+            // Decode the IV from Base64 to a byte array.
+            val ivBytes = Base64.decode(ivString, Base64.DEFAULT)
+            val ivParams = IvParameterSpec(ivBytes)
+
+            // Initialize the cipher in decryption mode with the AES key and the IV.
+            cipher.init(Cipher.DECRYPT_MODE, aesKey, ivParams)
 
             // Decode the encrypted message from Base64 to a byte array.
             val encryptedMessageBytes = Base64.decode(encryptedMessage, Base64.DEFAULT)
@@ -672,9 +741,55 @@ class ChatLog : AppCompatActivity() {
      * @param recipientId the ID of the chat partner.
      */
     private fun fetchAndDecryptMessages(recipientId: String) {
-        fetchSymmetricMessages(recipientId)
-        decryptUserOnlyMessages()
+        fetchSenderPublicKey(recipientId) { senderPublicKey ->
+            if (senderPublicKey != null) {
+                fetchSymmetricMessages(recipientId, senderPublicKey)
+                decryptUserOnlyMessages()
+            } else {
+                Log.e("com.example.encryptedmessenger.ChatLog", "Error fetching sender's public key")
+            }
+        }
     }
+
+    private fun fetchSenderPublicKey(senderId: String, callback: (PublicKey?) -> Unit) {
+        val db = FirebaseFirestore.getInstance()
+
+        db.collection("users")
+            .document(senderId)
+            .get()
+            .addOnSuccessListener { document ->
+                if (document != null) {
+                    val publicKeyString = document.getString("publicKey")
+                    if (publicKeyString != null) {
+                        val publicKey = convertStringToPublicKey(publicKeyString)
+                        callback(publicKey)
+                    } else {
+                        Log.e("com.example.encryptedmessenger.ChatLog", "Error: Public key not found")
+                        callback(null)
+                    }
+                } else {
+                    Log.e("com.example.encryptedmessenger.ChatLog", "Error: Document not found")
+                    callback(null)
+                }
+            }
+            .addOnFailureListener { exception ->
+                Log.e("com.example.encryptedmessenger.ChatLog", "Error fetching sender's public key", exception)
+                callback(null)
+            }
+    }
+
+    private fun convertStringToPublicKey(publicKeyString: String): PublicKey? {
+        return try {
+            val keyBytes = Base64.decode(publicKeyString, Base64.DEFAULT)
+            val keySpec = X509EncodedKeySpec(keyBytes)
+            val keyFactory = KeyFactory.getInstance("RSA")
+            keyFactory.generatePublic(keySpec)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
 
     /**
      * Sets up the RecyclerView with its layout manager and adapter.
@@ -689,6 +804,20 @@ class ChatLog : AppCompatActivity() {
         recyclerView.adapter = adapter
     }
 
+    /**
+     * Signs a plaintext message using the provided private key and returns the resulting signature as a Base64-encoded string.
+     *
+     * @param message The plaintext message to sign.
+     * @param privateKey The private key to use for signing.
+     * @return The Base64-encoded signature of the signed message, or null if there was an error during signing.
+     */
+    private fun signMessage(message: String, privateKey: PrivateKey): String {
+        val signature = Signature.getInstance("SHA256withRSA")
+        signature.initSign(privateKey)
+        signature.update(message.toByteArray(Charsets.UTF_8))
+        val signatureBytes = signature.sign()
+        return Base64.encodeToString(signatureBytes, Base64.DEFAULT)
+    }
 
 
 
