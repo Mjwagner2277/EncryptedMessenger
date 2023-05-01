@@ -37,6 +37,8 @@ class ChatLog : AppCompatActivity() {
     private lateinit var recyclerView: RecyclerView
     private lateinit var chatList: ArrayList<ChatMessage>
     private lateinit var adapter: ChatAdapter
+    private val messageIds = mutableSetOf<String>()
+
 
     /**
      * Initializes the activity and sets up the UI elements and listeners.
@@ -192,18 +194,23 @@ class ChatLog : AppCompatActivity() {
 
                 // Map the query results to a list of decrypted messages
                 val userSentMessages = querySnapshot?.documents?.mapNotNull { document ->
-                    // Retrieve the sender's username, encrypted message, encrypted AES key, IV, and timestamp from the document
+                    val messageId = document.id
                     val username = intent.getStringExtra("username")
                     val encryptedMessage = document.getString("encryptedMessage")
                     val encryptedAesKey = document.getString("encryptedAesKey")
                     val iv = document.getString("iv")
                     val timestamp = document.getDate("timestamp")
 
-                    // Decrypt the message using the encrypted AES key and IV, and create a ChatMessage object with the decrypted message, username, and timestamp
-                    if (encryptedMessage != null && encryptedAesKey != null && iv != null && timestamp != null) {
-                        val decryptedMessage = decryptUserMessage(encryptedMessage, encryptedAesKey, iv)
-                        if (decryptedMessage != null) {
-                            ChatMessage(username, decryptedMessage, timestamp)
+                    if (!messageIds.contains(messageId)) {
+                        if (encryptedMessage != null && encryptedAesKey != null && iv != null && timestamp != null) {
+                            val decryptedMessage = decryptUserMessage(encryptedMessage, encryptedAesKey, iv)
+                            if (decryptedMessage != null) {
+                                // Add the message ID to the set to avoid duplicates
+                                messageIds.add(messageId)
+                                ChatMessage(username, decryptedMessage, timestamp)
+                            } else {
+                                null
+                            }
                         } else {
                             null
                         }
@@ -211,6 +218,7 @@ class ChatLog : AppCompatActivity() {
                         null
                     }
                 } ?: emptyList()
+
 
                 // Update the chat list with the decrypted messages
                 updateChatList(userSentMessages)
@@ -306,6 +314,42 @@ class ChatLog : AppCompatActivity() {
             null
         }
     }
+    /**
+     * Encrypts a plaintext message using the provided AES key and returns the resulting ciphertext as a Base64-encoded string.
+     *
+     * @param message The plaintext message to encrypt.
+     * @param aesKey The AES key to use for encryption.
+     * @return The Base64-encoded ciphertext of the encrypted message, or null if there was an error during encryption.
+     */
+    @SuppressLint("GetInstance")
+    private fun encryptMessageAndSignWithAesKey(message: String, aesKey: SecretKey, privateKey: PrivateKey): String? {
+        return try {
+            // Get an instance of the Cipher class for AES encryption
+            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+
+            // Generate a random IV (Initialization Vector) for each encryption
+            val iv = ByteArray(cipher.blockSize)
+            SecureRandom().nextBytes(iv)
+            val ivParams = IvParameterSpec(iv)
+
+            // Initialize the cipher in encryption mode with the provided AES key and IV
+            cipher.init(Cipher.ENCRYPT_MODE, aesKey, ivParams)
+
+            // Encrypt the message with the cipher and convert the resulting ciphertext to a Base64-encoded string
+            val encryptedBytes = cipher.doFinal(message.toByteArray(Charsets.UTF_8))
+            val encryptedMessage = Base64.encodeToString(encryptedBytes, Base64.DEFAULT)
+
+            // Sign the encrypted message with the provided private key
+            val signedMessage = signMessage(encryptedMessage, privateKey)
+
+            // Combine the encrypted message, signature, and IV, separated by a delimiter
+            "${Base64.encodeToString(iv, Base64.DEFAULT)}|$encryptedMessage|$signedMessage"
+        } catch (e: Exception) {
+            // Log any errors that occur during encryption and return null to indicate failure
+            e.printStackTrace()
+            null
+        }
+    }
 
     /**
      * Retrieves the public key of the message recipient from the Firestore database,
@@ -362,42 +406,7 @@ class ChatLog : AppCompatActivity() {
         return keyGen.generateKey()
     }
 
-    /**
-     * Encrypts a plaintext message using the provided AES key and returns the resulting ciphertext as a Base64-encoded string.
-     *
-     * @param message The plaintext message to encrypt.
-     * @param aesKey The AES key to use for encryption.
-     * @return The Base64-encoded ciphertext of the encrypted message, or null if there was an error during encryption.
-     */
-    @SuppressLint("GetInstance")
-    private fun encryptMessageAndSignWithAesKey(message: String, aesKey: SecretKey, privateKey: PrivateKey): String? {
-        return try {
-            // Get an instance of the Cipher class for AES encryption
-            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
 
-            // Generate a random IV (Initialization Vector) for each encryption
-            val iv = ByteArray(cipher.blockSize)
-            SecureRandom().nextBytes(iv)
-            val ivParams = IvParameterSpec(iv)
-
-            // Initialize the cipher in encryption mode with the provided AES key and IV
-            cipher.init(Cipher.ENCRYPT_MODE, aesKey, ivParams)
-
-            // Encrypt the message with the cipher and convert the resulting ciphertext to a Base64-encoded string
-            val encryptedBytes = cipher.doFinal(message.toByteArray(Charsets.UTF_8))
-            val encryptedMessage = Base64.encodeToString(encryptedBytes, Base64.DEFAULT)
-
-            // Sign the encrypted message with the provided private key
-            val signedMessage = signMessage(encryptedMessage, privateKey)
-
-            // Combine the encrypted message, signature, and IV, separated by a delimiter
-            "${Base64.encodeToString(iv, Base64.DEFAULT)}|$encryptedMessage|$signedMessage"
-        } catch (e: Exception) {
-            // Log any errors that occur during encryption and return null to indicate failure
-            e.printStackTrace()
-            null
-        }
-    }
 
 
 
@@ -472,7 +481,6 @@ class ChatLog : AppCompatActivity() {
      *The function listens for changes in the database and updates the chat list accordingly.
      *It retrieves messages that were sent to and from the recipient identified by recipientId.
      */
-    @SuppressLint("NotifyDataSetChanged")
     private fun fetchSymmetricMessages(recipientId: String, senderPublicKey: PublicKey) {
         // Get an instance of the Firestore database and the ID of the current user
         val db = FirebaseFirestore.getInstance()
@@ -492,27 +500,26 @@ class ChatLog : AppCompatActivity() {
                     return@addSnapshotListener
                 }
 
-                // Clear the current chat list
-                chatList.clear()
-
                 // Iterate through the documents in the query results
                 querySnapshot?.documents?.forEach { document ->
+                    val messageId = document.id
                     val recipientUserName = intent.getStringExtra("recipientUsername")
                     val fromID = document.getString("fromID")
                     val toID = document.getString("toID")
                     val timestamp = document.getDate("timestamp")
 
-                    // Check if the message was sent to and from the recipient identified by recipientId
-                    if ((fromID == recipientId) && (toID == currentUserId)) {
+                    if ((fromID == recipientId) && (toID == currentUserId) && !messageIds.contains(messageId)) {
                         val encryptedMessage = document.getString("encryptedMessage")
                         val encryptedAesKey = document.getString("encryptedAesKey")
 
-                        // Decrypt the message using the encrypted AES key and the sender's public key
                         if (encryptedMessage != null && encryptedAesKey != null) {
                             val decryptedMessage = decryptMessage(encryptedMessage, encryptedAesKey, senderPublicKey)
                             if (decryptedMessage != null) {
                                 chatList.add(ChatMessage(recipientUserName, decryptedMessage, timestamp!!))
                                 println("The decrypted Message is: " + decryptedMessage)
+
+                                // Add the message ID to the set to avoid duplicates
+                                messageIds.add(messageId)
                             }
                         }
                         println("Encrypted Messages is null")
@@ -523,6 +530,7 @@ class ChatLog : AppCompatActivity() {
                 adapter.notifyDataSetChanged()
             }
     }
+
 
 
     /**
@@ -672,41 +680,6 @@ class ChatLog : AppCompatActivity() {
             secretKeySpec
         } catch (e: Exception) {
             // If there is an error decrypting the AES key, print the stack trace and return null.
-            e.printStackTrace()
-            null
-        }
-    }
-
-    /**
-     * Decrypts a message using an AES key.
-     *
-     * @param encryptedMessage the encrypted message to be decrypted.
-     * @param aesKey the AES key used to decrypt the message.
-     * @return the decrypted message or null if decryption failed.
-     */
-    @SuppressLint("GetInstance")
-    private fun decryptMessageWithAesKey(encryptedMessage: String, aesKey: SecretKey, ivString: String): String? {
-        return try {
-            // Get an instance of the AES cipher.
-            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-
-            // Decode the IV from Base64 to a byte array.
-            val ivBytes = Base64.decode(ivString, Base64.DEFAULT)
-            val ivParams = IvParameterSpec(ivBytes)
-
-            // Initialize the cipher in decryption mode with the AES key and the IV.
-            cipher.init(Cipher.DECRYPT_MODE, aesKey, ivParams)
-
-            // Decode the encrypted message from Base64 to a byte array.
-            val encryptedMessageBytes = Base64.decode(encryptedMessage, Base64.DEFAULT)
-
-            // Decrypt the message using the AES cipher.
-            val decryptedBytes = cipher.doFinal(encryptedMessageBytes)
-
-            // Convert the decrypted bytes to a UTF-8 encoded string and return it.
-            String(decryptedBytes, Charsets.UTF_8)
-        } catch (e: Exception) {
-            // If there is an error decrypting the message, print the stack trace and return null.
             e.printStackTrace()
             null
         }

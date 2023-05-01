@@ -23,6 +23,8 @@ class Register: AppCompatActivity() {
 
     private lateinit var auth: FirebaseAuth
 
+
+
     /**
      * Called when the activity is starting. This is where the UI is set up and click listeners are
      * added for the login and register buttons.
