@@ -287,8 +287,7 @@ class ChatLog : AppCompatActivity() {
     }
 
     /**
-     * Encrypts a plaintext message using AES-GCM encryption with a randomly generated AES key,
-     * encrypts the AES key using the recipient's public key using RSA encryption, and
+     * Encrypts a plaintext message using AES-GCM encryption with a randomly generated AES key,     * encrypts the AES key using the recipient's public key using RSA encryption, and
      * returns the encrypted message and encrypted AES key as an instance of EncryptedMessageData.
      *
      * @param message The plaintext message to be encrypted.

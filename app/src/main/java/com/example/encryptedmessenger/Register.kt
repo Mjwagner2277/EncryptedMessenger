@@ -121,10 +121,8 @@ class Register: AppCompatActivity() {
                     val alias = "key_$uid"
                     val keyPairGenerator = KeyPairGenerator.getInstance("RSA", "AndroidKeyStore")
                     keyPairGenerator.initialize(
-                        KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT or KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
+                        KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_PKCS1)
-                            .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1)
-                            .setDigests(KeyProperties.DIGEST_SHA256)
                             .setKeySize(2048)
                             .build()
                     )
